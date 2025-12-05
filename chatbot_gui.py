@@ -4,6 +4,10 @@ import pandas as pd
 import numpy as np
 from sklearn.model_selection import train_test_split
 from sklearn.ensemble import RandomForestClassifier
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.linear_model import LogisticRegression
+from sklearn.svm import SVC
+from sklearn.preprocessing import StandardScaler
 import threading
 import os
 import sys
@@ -45,6 +49,11 @@ class ModernPhonePricePredictor:
         self.feature_cols = None
         self.scaler = None
         self.unique_values = {}
+        self.current_model_name = 'Random Forest'
+        self.models = {}  # Store trained models
+        self.X_train = None
+        self.y_train = None
+        self.X_train_scaled = None
         
         # Configure styles
         self.setup_styles()
@@ -132,6 +141,38 @@ class ModernPhonePricePredictor:
                                   text="AI-Powered Price Category Prediction",
                                   style='Subtitle.TLabel')
         subtitle_label.pack(side='left', padx=(20, 0), pady=(10, 0))
+        
+        # Model selector on the right side of header
+        model_frame = ttk.Frame(header_frame, style='Dark.TFrame')
+        model_frame.pack(side='right', padx=10)
+        
+        model_label = ttk.Label(model_frame, text="🧠 Model:",
+                               style='Subtitle.TLabel')
+        model_label.pack(side='left', padx=(0, 10))
+        
+        self.model_var = tk.StringVar(value='Random Forest')
+        model_combo = ttk.Combobox(model_frame, textvariable=self.model_var,
+                                   values=['Random Forest', 'KNN', 'Logistic Regression', 'SVM'],
+                                   state='readonly', font=('Segoe UI', 10), width=18)
+        model_combo.pack(side='left')
+        model_combo.bind('<<ComboboxSelected>>', self.on_model_change)
+        
+        # Train button
+        self.train_btn = tk.Button(model_frame, text="🔄 Train",
+                                   bg=self.colors['bg_light'],
+                                   fg=self.colors['text_primary'],
+                                   activebackground=self.colors['border'],
+                                   activeforeground=self.colors['text_primary'],
+                                   font=('Segoe UI', 10),
+                                   relief='flat',
+                                   cursor='hand2',
+                                   command=self.retrain_model)
+        self.train_btn.pack(side='left', padx=(10, 0))
+        
+        # Model status indicator
+        self.model_status = ttk.Label(model_frame, text="⏳ Loading...",
+                                      style='Subtitle.TLabel')
+        self.model_status.pack(side='left', padx=(10, 0))
         
         # Content area - split into left (inputs) and right (chat)
         content_frame = ttk.Frame(main_container, style='Dark.TFrame')
@@ -485,8 +526,72 @@ class ModernPhonePricePredictor:
         self.chat_display.config(state='disabled')
         self.chat_display.see('end')
     
+    def on_model_change(self, event=None):
+        """Handle model selection change"""
+        selected = self.model_var.get()
+        if selected in self.models:
+            self.model = self.models[selected]['model']
+            self.scaler = self.models[selected].get('scaler')
+            self.current_model_name = selected
+            self.add_bot_message(f"🔄 Switched to {selected} model.")
+            self.model_status.config(text=f"✅ {selected}")
+        else:
+            self.add_bot_message(f"⏳ {selected} model not trained yet. Click 'Train' to train it.")
+            self.model_status.config(text=f"⚠️ Not trained")
+    
+    def retrain_model(self):
+        """Retrain the selected model"""
+        selected = self.model_var.get()
+        self.add_bot_message(f"🔄 Training {selected} model...")
+        self.model_status.config(text="⏳ Training...")
+        threading.Thread(target=lambda: self.train_specific_model(selected), daemon=True).start()
+    
+    def train_specific_model(self, model_name):
+        """Train a specific model"""
+        try:
+            if self.X_train is None:
+                self.root.after(0, lambda: self.add_bot_message("❌ Data not loaded. Please wait for initial loading."))
+                return
+            
+            if model_name == 'Random Forest':
+                model = RandomForestClassifier(
+                    n_estimators=200, random_state=42, n_jobs=-1,
+                    max_depth=20, min_samples_split=5
+                )
+                model.fit(self.X_train, self.y_train)
+                scaler = None
+            elif model_name == 'KNN':
+                scaler = StandardScaler()
+                X_scaled = scaler.fit_transform(self.X_train)
+                model = KNeighborsClassifier(n_neighbors=5)
+                model.fit(X_scaled, self.y_train)
+            elif model_name == 'Logistic Regression':
+                scaler = StandardScaler()
+                X_scaled = scaler.fit_transform(self.X_train)
+                model = LogisticRegression(max_iter=300)
+                model.fit(X_scaled, self.y_train)
+            elif model_name == 'SVM':
+                scaler = StandardScaler()
+                X_scaled = scaler.fit_transform(self.X_train)
+                model = SVC(kernel='rbf', C=10, gamma='scale', probability=True, random_state=42)
+                model.fit(X_scaled, self.y_train)
+            else:
+                return
+            
+            self.models[model_name] = {'model': model, 'scaler': scaler}
+            self.model = model
+            self.scaler = scaler
+            self.current_model_name = model_name
+            
+            self.root.after(0, lambda: self.add_bot_message(f"✅ {model_name} model trained successfully!"))
+            self.root.after(0, lambda: self.model_status.config(text=f"✅ {model_name}"))
+            
+        except Exception as e:
+            self.root.after(0, lambda: self.add_bot_message(f"❌ Error training {model_name}: {str(e)}"))
+            self.root.after(0, lambda: self.model_status.config(text="❌ Error"))
+    
     def train_model(self):
-        """Train the Random Forest model in background"""
+        """Train all models in background"""
         try:
             # Get the directory of this script
             script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -522,25 +627,58 @@ class ModernPhonePricePredictor:
                 X, y, test_size=0.2, random_state=42
             )
             
-            # Train Random Forest model
-            self.model = RandomForestClassifier(
-                n_estimators=200,
-                random_state=42,
-                n_jobs=-1,
-                max_depth=20,
-                min_samples_split=5
+            # Store training data for later model training
+            self.X_train = X_train
+            self.y_train = y_train
+            
+            # Train Random Forest model (default)
+            rf_model = RandomForestClassifier(
+                n_estimators=200, random_state=42, n_jobs=-1,
+                max_depth=20, min_samples_split=5
             )
-            self.model.fit(X_train, y_train)
+            rf_model.fit(X_train, y_train)
+            self.models['Random Forest'] = {'model': rf_model, 'scaler': None}
+            
+            # Train KNN model
+            knn_scaler = StandardScaler()
+            X_train_scaled = knn_scaler.fit_transform(X_train)
+            knn_model = KNeighborsClassifier(n_neighbors=5)
+            knn_model.fit(X_train_scaled, y_train)
+            self.models['KNN'] = {'model': knn_model, 'scaler': knn_scaler}
+            
+            # Train Logistic Regression model
+            lr_scaler = StandardScaler()
+            X_train_scaled_lr = lr_scaler.fit_transform(X_train)
+            lr_model = LogisticRegression(max_iter=300)
+            lr_model.fit(X_train_scaled_lr, y_train)
+            self.models['Logistic Regression'] = {'model': lr_model, 'scaler': lr_scaler}
+            
+            # Train SVM model
+            svm_scaler = StandardScaler()
+            X_train_scaled_svm = svm_scaler.fit_transform(X_train)
+            svm_model = SVC(kernel='rbf', C=10, gamma='scale', probability=True, random_state=42)
+            svm_model.fit(X_train_scaled_svm, y_train)
+            self.models['SVM'] = {'model': svm_model, 'scaler': svm_scaler}
+            
+            # Set default model
+            self.model = rf_model
+            self.scaler = None
+            self.current_model_name = 'Random Forest'
             
             # Update chat on main thread
             self.root.after(0, lambda: self.add_bot_message(
-                "✅ AI Model loaded successfully! Enter phone specs and click 'Predict Price Category'."
+                "✅ All models loaded! Random Forest, KNN, Logistic Regression, and SVM are ready."
             ))
+            self.root.after(0, lambda: self.add_bot_message(
+                "💡 Use the model selector in the header to switch between models."
+            ))
+            self.root.after(0, lambda: self.model_status.config(text="✅ Random Forest"))
             
         except Exception as e:
             self.root.after(0, lambda: self.add_bot_message(
                 f"❌ Error loading model: {str(e)}"
             ))
+            self.root.after(0, lambda: self.model_status.config(text="❌ Error"))
     
     def get_input_values(self):
         """Get all input values as a dictionary"""
@@ -624,6 +762,10 @@ class ModernPhonePricePredictor:
             # Get features in correct order
             X_pred = processed_df[self.feature_cols]
             
+            # Scale if needed (for KNN and Logistic Regression)
+            if self.scaler is not None:
+                X_pred = pd.DataFrame(self.scaler.transform(X_pred), columns=self.feature_cols)
+            
             # Make prediction
             prediction = self.model.predict(X_pred)[0]
             
@@ -631,7 +773,8 @@ class ModernPhonePricePredictor:
             proba = self.model.predict_proba(X_pred)[0]
             confidence = max(proba)
             
-            # Display result
+            # Display result with model name
+            self.add_bot_message(f"📊 Using {self.current_model_name}:")
             self.add_prediction_result(prediction, confidence)
             
         except Exception as e:
