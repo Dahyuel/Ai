@@ -53,6 +53,7 @@ def preprocess(df, label_encoders=None, fit=True):
     If fit=True → fit LabelEncoders and scalers.
     If fit=False → use existing label_encoders (for test data).
     """
+    print("DEBUG: Running Preprocessing v2")
     df = df.copy()
 
     # === Remove unwanted columns ===
@@ -86,14 +87,15 @@ def preprocess(df, label_encoders=None, fit=True):
                 le = LabelEncoder()
                 df[f'{col}_encoded'] = le.fit_transform(df[col])
                 label_encoders[col] = le
-        else:
-            le = label_encoders[col]
-            df[f'{col}_encoded'] = df[col].apply(lambda v: le.transform([v])[0] if v in le.classes_ else -1)
+            else:
+                if col in label_encoders:
+                    le = label_encoders[col]
+                    df[f'{col}_encoded'] = df[col].apply(lambda v: le.transform([v])[0] if v in le.classes_ else -1)
 
 
     # === OS Version ===
     if 'os_version' in df.columns:
-        df['os_version_numeric'] = df['os_version'].str.extract('(\d+)').astype(float)
+        df['os_version_numeric'] = df['os_version'].str.extract(r'(\d+)').astype(float)
 
     # === Memory Card Size to numeric ===
     if 'memory_card_size' in df.columns:
